@@ -16,8 +16,18 @@ def save_song(db: Session, file_path: Path):
     )
 
     if existing_song:
+        path_changed = existing_song.file_path != str(file_path)
+
+        if path_changed:
+            existing_song.file_path = str(file_path)
+
+        existing_song.is_available = True
+
+        db.commit()
+        db.refresh(existing_song)
+
         return {
-            "status": "unchanged",
+            "status": "updated" if path_changed else "unchanged",
             "song": existing_song,
         }
 
@@ -32,6 +42,7 @@ def save_song(db: Session, file_path: Path):
         duration=metadata.get("duration"),
         file_path=str(file_path),
         file_hash=file_hash,
+        is_available=True,
     )
 
     db.add(song)
