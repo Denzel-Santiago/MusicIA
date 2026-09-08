@@ -6,7 +6,9 @@ from app.models.song import Song
 from app.services.scanner import find_duplicates, scan_music_folder
 from app.services.library import save_song
 from app.services.metadata_normalizer import normalize_metadata
-
+from pathlib import Path
+from app.services.scanner import read_metadata
+from app.services.metadata_resolver import resolve_metadata
 
 router = APIRouter(prefix="/songs", tags=["Songs"])
 
@@ -136,4 +138,70 @@ def normalize_library(db: Session = Depends(get_db)):
     return {
         "total_songs": len(songs),
         "updated_songs": updated_songs,
+    }
+    
+@router.post("/resolve-metadata")
+def resolve_library_metadata(db: Session = Depends(get_db)):
+    songs = db.query(Song).all()
+
+    processed_songs = 0
+    skipped_songs = 0
+    updated_songs = 0
+
+    changes = []
+
+    for song in songs:
+
+        file_path = Path(song.file_path)
+
+        if not file_path.exists():
+            skipped_songs += 1
+            continue
+
+        metadata = read_metadata(file_path)
+        metadata = normalize_metadata(metadata)
+
+        resolved_metadata = resolve_metadata(
+            metadata,
+            file_path.name
+        )
+
+        old_values = {
+            "normalized_title": song.normalized_title,
+            "normalized_artist": song.normalized_artist,
+            "metadata_source": song.metadata_source,
+            "metadata_confidence": song.metadata_confidence,
+        }
+
+        song.normalized_title = resolved_metadata.get("title")
+        song.normalized_artist = resolved_metadata.get("artist")
+        song.metadata_source = resolved_metadata.get("metadata_source")
+        song.metadata_confidence = resolved_metadata.get("metadata_confidence")
+
+        new_values = {
+            "normalized_title": song.normalized_title,
+            "normalized_artist": song.normalized_artist,
+            "metadata_source": song.metadata_source,
+            "metadata_confidence": song.metadata_confidence,
+        }
+
+        if old_values != new_values:
+            updated_songs += 1
+
+            changes.append({
+                "file": file_path.name,
+                "old": old_values,
+                "new": new_values,
+            })
+
+        processed_songs += 1
+
+    db.commit()
+
+    return {
+        "total_songs": len(songs),
+        "processed_songs": processed_songs,
+        "skipped_songs": skipped_songs,
+        "updated_songs": updated_songs,
+        "changes": changes,
     }

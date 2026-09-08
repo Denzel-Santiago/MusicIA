@@ -73,10 +73,6 @@ def normalize_genre(value):
 
 
 def normalize_metadata(metadata):
-    """
-    Normaliza todos los campos de metadata disponibles.
-    """
-
     return {
         "title": normalize_title(metadata.get("title")),
         "artist": normalize_artist(metadata.get("artist")),
@@ -84,4 +80,5 @@ def normalize_metadata(metadata):
         "genre": normalize_genre(metadata.get("genre")),
         "year": metadata.get("year"),
         "duration": metadata.get("duration"),
+        "title_source": metadata.get("title_source"),
     }

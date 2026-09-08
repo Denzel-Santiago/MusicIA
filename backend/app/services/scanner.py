@@ -1,5 +1,5 @@
 from pathlib import Path
-
+import re
 from mutagen import File
 import hashlib
 
@@ -49,36 +49,50 @@ def read_metadata(file_path: Path):
             "genre": None,
             "year": None,
             "duration": None,
+            "title_source": "filename_fallback",
         }
 
-    def get_first(tag_name):
-        value = audio.get(tag_name)
+    def get_first_value(key):
+        value = audio.get(key)
 
         if value:
             return value[0]
 
         return None
 
-    year = get_first("date")
-
-    if year:
-        try:
-            year = int(str(year)[:4])
-        except ValueError:
-            year = None
+    title = get_first_value("title")
+    artist = get_first_value("artist")
+    album = get_first_value("album")
+    genre = get_first_value("genre")
+    date = get_first_value("date")
 
     duration = None
 
-    if audio.info:
+    if audio.info and hasattr(audio.info, "length"):
         duration = audio.info.length
 
+    year = None
+
+    if date:
+        match = re.search(r"\d{4}", str(date))
+
+        if match:
+            year = int(match.group())
+
+    title_source = "metadata"
+
+    if not title:
+        title = file_path.stem
+        title_source = "filename_fallback"
+
     return {
-        "title": get_first("title") or file_path.stem,
-        "artist": get_first("artist"),
-        "album": get_first("album"),
-        "genre": get_first("genre"),
+        "title": title,
+        "artist": artist,
+        "album": album,
+        "genre": genre,
         "year": year,
         "duration": duration,
+        "title_source": title_source,
     }
     
 def calculate_file_hash(file_path: Path) -> str:
