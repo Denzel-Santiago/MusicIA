@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 
 from app.models.song import Song
 from app.services.scanner import calculate_file_hash, read_metadata
+from app.services.metadata_normalizer import normalize_metadata
 
 
 def save_song(db: Session, file_path: Path):
@@ -32,6 +33,7 @@ def save_song(db: Session, file_path: Path):
         }
 
     metadata = read_metadata(file_path)
+    metadata = normalize_metadata(metadata)
 
     song = Song(
         title=metadata.get("title"),

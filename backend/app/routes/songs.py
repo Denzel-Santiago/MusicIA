@@ -5,6 +5,7 @@ from app.database.connection import get_db
 from app.models.song import Song
 from app.services.scanner import find_duplicates, scan_music_folder
 from app.services.library import save_song
+from app.services.metadata_normalizer import normalize_metadata
 
 
 router = APIRouter(prefix="/songs", tags=["Songs"])
@@ -89,3 +90,50 @@ def get_songs(db: Session = Depends(get_db)):
     songs = db.query(Song).all()
 
     return songs
+
+@router.post("/normalize")
+def normalize_library(db: Session = Depends(get_db)):
+    songs = db.query(Song).all()
+
+    updated_songs = 0
+
+    for song in songs:
+
+        original_data = {
+            "title": song.title,
+            "artist": song.artist,
+            "album": song.album,
+            "genre": song.genre,
+            "year": song.year,
+            "duration": song.duration,
+        }
+
+        normalized_data = normalize_metadata(original_data)
+
+        changed = False
+
+        if song.title != normalized_data["title"]:
+            song.title = normalized_data["title"]
+            changed = True
+
+        if song.artist != normalized_data["artist"]:
+            song.artist = normalized_data["artist"]
+            changed = True
+
+        if song.album != normalized_data["album"]:
+            song.album = normalized_data["album"]
+            changed = True
+
+        if song.genre != normalized_data["genre"]:
+            song.genre = normalized_data["genre"]
+            changed = True
+
+        if changed:
+            updated_songs += 1
+
+    db.commit()
+
+    return {
+        "total_songs": len(songs),
+        "updated_songs": updated_songs,
+    }
