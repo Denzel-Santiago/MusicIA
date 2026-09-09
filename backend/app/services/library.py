@@ -6,6 +6,7 @@ from app.models.song import Song
 from app.services.scanner import calculate_file_hash, read_metadata
 from app.services.metadata_normalizer import normalize_metadata
 from app.services.metadata_resolver import resolve_metadata
+from app.services.metadata_cleaner import clean_resolved_metadata
 
 
 def save_song(db: Session, file_path: Path):
@@ -37,9 +38,10 @@ def save_song(db: Session, file_path: Path):
     metadata = normalize_metadata(metadata)
 
     resolved_metadata = resolve_metadata(
-    metadata,
-    file_path.name
-)
+        metadata,
+        file_path.name,
+    )
+    resolved_metadata = clean_resolved_metadata(resolved_metadata)
 
     song = Song(
         title=metadata.get("title"),

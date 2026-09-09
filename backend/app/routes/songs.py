@@ -9,8 +9,25 @@ from app.services.metadata_normalizer import normalize_metadata
 from pathlib import Path
 from app.services.scanner import read_metadata
 from app.services.metadata_resolver import resolve_metadata
+from app.services.metadata_cleaner import clean_resolved_metadata
 
 router = APIRouter(prefix="/songs", tags=["Songs"])
+
+PROTECTED_CLEANING_FIELDS = (
+    "id",
+    "title",
+    "artist",
+    "album",
+    "genre",
+    "year",
+    "duration",
+    "normalized_artist",
+    "metadata_source",
+    "metadata_confidence",
+    "file_path",
+    "file_hash",
+    "is_available",
+)
 
 
 @router.post("/scan")
@@ -203,5 +220,79 @@ def resolve_library_metadata(db: Session = Depends(get_db)):
         "processed_songs": processed_songs,
         "skipped_songs": skipped_songs,
         "updated_songs": updated_songs,
+        "changes": changes,
+    }
+
+
+@router.post("/clean-metadata")
+def preview_clean_metadata(db: Session = Depends(get_db)):
+    """Preview normalized title cleanup without changing persisted songs."""
+    songs = db.query(Song).all()
+    changes = []
+
+    for song in songs:
+        before = song.normalized_title
+        cleaned_metadata = clean_resolved_metadata({"title": before})
+        after = cleaned_metadata["title"]
+
+        if before != after:
+            changes.append({
+                "file": Path(song.file_path).name,
+                "before": before,
+                "after": after,
+            })
+
+    return {
+        "total_songs": len(songs),
+        "songs_with_changes": len(changes),
+        "songs_without_changes": len(songs) - len(changes),
+        "changes": changes,
+    }
+
+
+@router.post("/clean-metadata/apply")
+def apply_clean_metadata(db: Session = Depends(get_db)):
+    """Persist only normalized title cleanup after protecting all other fields."""
+    songs = db.query(Song).all()
+    changes = []
+
+    for song in songs:
+        before = song.normalized_title
+        cleaned_metadata = clean_resolved_metadata({"title": before})
+        after = cleaned_metadata["title"]
+
+        if before == after:
+            continue
+
+        protected_values = {
+            field: getattr(song, field)
+            for field in PROTECTED_CLEANING_FIELDS
+        }
+
+        # This is the only model attribute the APPLY endpoint may assign.
+        song.normalized_title = after
+
+        if any(
+            getattr(song, field) != value
+            for field, value in protected_values.items()
+        ):
+            db.rollback()
+            raise HTTPException(
+                status_code=500,
+                detail="Protected song metadata changed during cleanup.",
+            )
+
+        changes.append({
+            "file": Path(song.file_path).name,
+            "before": before,
+            "after": after,
+        })
+
+    db.commit()
+
+    return {
+        "total_songs": len(songs),
+        "updated_songs": len(changes),
+        "unchanged_songs": len(songs) - len(changes),
         "changes": changes,
     }
