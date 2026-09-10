@@ -18,6 +18,23 @@ VERSION_PATTERNS = (
 )
 
 
+PURE_VERSION_LABELS = (
+    "original mix",
+    "radio edit",
+    "club mix",
+    "extended mix",
+    "extended version",
+    "acoustic version",
+    "live version",
+    "live",
+    "remix",
+    "edit",
+    "instrumental",
+    "acoustic",
+    "version",
+)
+
+
 def clean_extracted_text(value):
     if not value:
         return None
@@ -30,18 +47,6 @@ def clean_extracted_text(value):
 
 
 def looks_like_versioned_title(value):
-    """
-    Determina si un texto parece ser un título musical
-    acompañado de información de versión.
-
-    Ejemplos:
-
-        Levels - Original Mix
-        The Nights - Radio Edit
-        Wake Me Up - Acoustic Version
-        Some Song - Club Mix
-    """
-
     if not value:
         return False
 
@@ -53,19 +58,43 @@ def looks_like_versioned_title(value):
     )
 
 
-def extract_artist_title_from_filename(filename: str):
+def is_pure_version_label(value):
     """
-    Intenta obtener artista y título a partir del nombre del archivo.
+    Determina si el texto corresponde únicamente a una etiqueta
+    de versión musical.
 
     Ejemplos:
+        Original Mix
+        Radio Edit
+        Club Mix
+        Acoustic Version
+        Remix
 
-        Avicii - The Nights.mp3
-            -> Avicii / The Nights
+    Esto permite distinguir:
 
-        Levels - Original Mix.mp3
-            -> None / Levels - Original Mix
+        Levels - Original Mix
+
+    de:
+
+        Avicii - For A Better Day (KSHMR Remix)
     """
 
+    if not value:
+        return False
+
+    normalized = value.strip().lower()
+
+    # Eliminar paréntesis exteriores.
+    normalized = re.sub(
+        r"^\((.*)\)$",
+        r"\1",
+        normalized,
+    ).strip()
+
+    return normalized in PURE_VERSION_LABELS
+
+
+def extract_artist_title_from_filename(filename: str):
     if not filename:
         return {
             "artist": None,
@@ -89,45 +118,47 @@ def extract_artist_title_from_filename(filename: str):
             "confidence": 0.0,
         }
 
-    # ---------------------------------------------------------
-    # Detectar títulos que contienen información de versión
-    # ---------------------------------------------------------
-
-    if looks_like_versioned_title(name):
-        return {
-            "artist": None,
-            "title": name,
-            "confidence": 0.40,
-        }
-
-    # ---------------------------------------------------------
-    # Intentar separar artista y título
-    # ---------------------------------------------------------
-
     match = re.match(
         r"^(.+?)\s*[-–—_]\s*(.+)$",
         name,
     )
 
     if match:
-        artist = clean_extracted_text(
-            match.group(1)
-        )
+        left = clean_extracted_text(match.group(1))
+        right = clean_extracted_text(match.group(2))
 
-        title = clean_extracted_text(
-            match.group(2)
-        )
+        if left and right:
 
-        if artist and title:
+            # Si todo lo que está después del separador es
+            # únicamente una etiqueta de versión, no asumimos
+            # que la parte izquierda sea necesariamente el artista.
+            #
+            # Ejemplo:
+            # Levels - Original Mix
+            #
+            # Se conserva como título completo.
+            if is_pure_version_label(right):
+                return {
+                    "artist": None,
+                    "title": name,
+                    "confidence": 0.40,
+                }
+
+            # Si el lado derecho contiene información musical
+            # real además de la versión, podemos interpretar
+            # el lado izquierdo como artista.
+            #
+            # Ejemplo:
+            # Avicii - For A Better Day (KSHMR Remix)
+            #
+            # Resultado:
+            # artist = Avicii
+            # title  = For A Better Day (KSHMR Remix)
             return {
-                "artist": artist,
-                "title": title,
+                "artist": left,
+                "title": right,
                 "confidence": 0.90,
             }
-
-    # ---------------------------------------------------------
-    # Solo título
-    # ---------------------------------------------------------
 
     return {
         "artist": None,
@@ -137,33 +168,33 @@ def extract_artist_title_from_filename(filename: str):
 
 
 if __name__ == "__main__":
-
     tests = [
         "Avicii - The Nights.mp3",
         "Avicii - Waiting For Love.mp3",
         "Broken Arrows.mp3",
+
+        # Casos protegidos
         "Levels - Original Mix.mp3",
         "The Nights - Radio Edit.mp3",
         "Wake Me Up - Acoustic Version.mp3",
         "Some Song - Club Mix.mp3",
-        "Song Title (Live Version).mp3",
+
+        # Casos que ahora deben separar correctamente
+        "Avicii - For A Better Day (KSHMR Remix).mp3",
+        "Avicii - Without You (AFISHAL Remix).mp3",
+        "Avicii - All You Need Is Love (Original Mix) HQ.mp3",
+        "Avicii - Some Song (Radio Edit).mp3",
+        "Avicii - Song Title (Acoustic Version).mp3",
+
+        # Otros casos
         "Avicii - Lonely Together.mp3",
+        "Song Title feat. Artist.mp3",
+        "Song Title (Live Version).mp3",
     ]
 
     for filename in tests:
+        result = extract_artist_title_from_filename(filename)
 
-        result = extract_artist_title_from_filename(
-            filename
-        )
-
-        print(
-            "\n-----------------------------"
-        )
-
-        print(
-            f"Archivo: {filename}"
-        )
-
-        print(
-            f"Resultado: {result}"
-        )
+        print("\n-----------------------------")
+        print(f"Archivo: {filename}")
+        print(f"Resultado: {result}")

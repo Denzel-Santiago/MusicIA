@@ -1,3 +1,5 @@
+"""Cliente para realizar consultas a MusicBrainz."""
+
 from __future__ import annotations
 
 import time
@@ -19,6 +21,7 @@ MIN_REQUEST_INTERVAL = 1.1
 
 
 class MusicBrainzClient:
+
     def __init__(self) -> None:
         self.session = requests.Session()
 
@@ -36,7 +39,10 @@ class MusicBrainzClient:
         Garantiza un intervalo mínimo entre solicitudes.
         """
 
-        elapsed = time.monotonic() - self._last_request_time
+        elapsed = (
+            time.monotonic()
+            - self._last_request_time
+        )
 
         if elapsed < MIN_REQUEST_INTERVAL:
             time.sleep(
@@ -48,17 +54,25 @@ class MusicBrainzClient:
         endpoint: str,
         params: dict[str, Any],
         max_retries: int = 3,
-    ) -> dict[str, Any]:
+    ) -> dict[str, Any] | None:
         """
         Realiza una solicitud GET a MusicBrainz.
 
-        Los errores 429 y 503 se consideran temporales
-        y se manejan mediante reintentos con exponential backoff.
+        Los errores 429, 503 y los errores de red se consideran
+        temporales y se manejan mediante reintentos con
+        exponential backoff.
+
+        Si todos los intentos fallan, devuelve None en lugar
+        de lanzar una excepción.
+
+        Esto permite que MusicAI continúe procesando las demás
+        canciones aunque MusicBrainz no esté disponible.
         """
 
         url = f"{MUSICBRAINZ_BASE_URL}/{endpoint}"
 
         for attempt in range(max_retries + 1):
+
             self._wait_for_rate_limit()
 
             try:
@@ -68,36 +82,57 @@ class MusicBrainzClient:
                     timeout=15,
                 )
 
-                self._last_request_time = time.monotonic()
+                self._last_request_time = (
+                    time.monotonic()
+                )
 
+                # -------------------------------------------------
                 # 429 = Too Many Requests
                 # 503 = Service Temporarily Unavailable
+                # -------------------------------------------------
+
                 if response.status_code in (429, 503):
 
                     if attempt >= max_retries:
-                        response.raise_for_status()
+                        print(
+                            "MusicBrainz no está disponible "
+                            "después de varios intentos. "
+                            f"HTTP {response.status_code}."
+                        )
+
+                        return None
 
                     wait_time = 2 ** attempt
 
                     print(
-                        f"MusicBrainz respondió "
+                        "MusicBrainz respondió "
                         f"{response.status_code}. "
-                        f"Reintentando en "
+                        "Reintentando en "
                         f"{wait_time} segundos..."
                     )
 
                     time.sleep(wait_time)
+
                     continue
 
+                # -------------------------------------------------
                 # Otros errores HTTP
+                # -------------------------------------------------
+
                 response.raise_for_status()
 
                 return response.json()
 
-            except requests.RequestException:
+            except requests.RequestException as exc:
 
                 if attempt >= max_retries:
-                    raise
+                    print(
+                        "No se pudo consultar MusicBrainz "
+                        "después de varios intentos. "
+                        f"Error: {type(exc).__name__}"
+                    )
+
+                    return None
 
                 wait_time = 2 ** attempt
 
@@ -110,10 +145,8 @@ class MusicBrainzClient:
 
                 time.sleep(wait_time)
 
-        raise RuntimeError(
-            "No se pudo obtener una respuesta "
-            "de MusicBrainz."
-        )
+        # Seguridad adicional.
+        return None
 
     @staticmethod
     def _extract_artists(
@@ -126,15 +159,16 @@ class MusicBrainzClient:
 
         artist_credit = recording.get(
             "artist-credit",
-            []
+            [],
         )
 
         artists = []
 
         for credit in artist_credit:
+
             artist_data = credit.get(
                 "artist",
-                {}
+                {},
             )
 
             artist_name = artist_data.get(
@@ -158,7 +192,9 @@ class MusicBrainzClient:
         interno utilizado por MusicAI.
         """
 
-        duration_ms = recording.get("length")
+        duration_ms = recording.get(
+            "length"
+        )
 
         duration = None
 
@@ -171,13 +207,17 @@ class MusicBrainzClient:
 
         return {
             "mbid": recording.get("id"),
+
             "title": recording.get("title"),
+
             "artists": artists,
+
             "artist": (
                 ", ".join(artists)
                 if artists
                 else None
             ),
+
             "duration": duration,
         }
 
@@ -193,6 +233,10 @@ class MusicBrainzClient:
 
         Devuelve resultados ya convertidos al formato
         interno de MusicAI.
+
+        Si MusicBrainz no está disponible o la solicitud
+        falla después de los reintentos, devuelve una
+        lista vacía.
         """
 
         if not title:
@@ -207,7 +251,9 @@ class MusicBrainzClient:
                 f'artist:"{artist}"'
             )
 
-        query = " AND ".join(query_parts)
+        query = " AND ".join(
+            query_parts
+        )
 
         data = self._get(
             "recording",
@@ -218,9 +264,20 @@ class MusicBrainzClient:
             },
         )
 
+        # ---------------------------------------------------------
+        # MusicBrainz no respondió correctamente.
+        #
+        # No lanzamos excepción.
+        # El identificador podrá continuar con la siguiente
+        # consulta/canción.
+        # ---------------------------------------------------------
+
+        if not data:
+            return []
+
         recordings = data.get(
             "recordings",
-            []
+            [],
         )
 
         return [
@@ -240,6 +297,7 @@ def create_musicbrainz_client() -> MusicBrainzClient:
 
 
 if __name__ == "__main__":
+
     client = create_musicbrainz_client()
 
     results = client.search_recordings(
@@ -256,8 +314,12 @@ if __name__ == "__main__":
         results,
         start=1,
     ):
+
         print()
-        print(f"Resultado #{index}")
+
+        print(
+            f"Resultado #{index}"
+        )
 
         print(
             f"MBID: "
@@ -278,4 +340,3 @@ if __name__ == "__main__":
             f"Duración: "
             f"{recording.get('duration')}"
         )
-
