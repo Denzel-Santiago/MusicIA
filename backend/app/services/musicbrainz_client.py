@@ -221,6 +221,31 @@ class MusicBrainzClient:
             "duration": duration,
         }
 
+    def get_recording(
+        self,
+        recording_id: str,
+    ) -> dict[str, Any] | None:
+        """
+        Obtiene información detallada de un recording de MusicBrainz
+        mediante su MBID.
+        """
+
+        if not recording_id:
+            return None
+
+        data = self._get(
+            f"recording/{recording_id}",
+            {
+                "fmt": "json",
+                "inc": "artists+releases+release-groups",
+            },
+        )
+
+        if not data:
+            return None
+
+        return self._normalize_recording(data)
+
     def search_recordings(
         self,
         title: str,

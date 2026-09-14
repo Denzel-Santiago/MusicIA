@@ -24,6 +24,7 @@ class Song(Base):
     # Archivo
     file_path = Column(String(2000), unique=True, nullable=False)
     file_hash = Column(String(64), unique=True, nullable=False, index=True)
+    acoustic_fingerprint = Column(String(10000), unique=True, nullable=True, index=True)
 
     # Disponibilidad
     is_available = Column(Boolean, default=True, nullable=False)

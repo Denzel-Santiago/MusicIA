@@ -94,6 +94,50 @@ def is_pure_version_label(value):
     return normalized in PURE_VERSION_LABELS
 
 
+def extract_reversed_lyric_filename(name: str):
+    """
+    Detecta nombres de archivo donde el formato parece estar invertido:
+
+        (Letra) Titulo - Artista (Completa)
+
+    y devuelve:
+
+        artist = Artista
+        title  = Titulo
+
+    La regla es deliberadamente conservadora para no invertir
+    nombres de archivo normales como:
+
+        Avicii - The Nights
+    """
+
+    if not name:
+        return None
+
+    match = re.match(
+        r"^\((?:letra|lyrics?|lyric)\)\s*(.+?)\s*[-–—_]\s*(.+?)\s*\((?:completa|complete)\)$",
+        name,
+        flags=re.IGNORECASE,
+    )
+
+    if not match:
+        return None
+
+    title = clean_extracted_text(match.group(1))
+    artist = clean_extracted_text(match.group(2))
+
+    if not title or not artist:
+        return None
+
+    return {
+        "artist": artist,
+        "title": title,
+        "confidence": 0.90,
+    }
+
+
+
+
 def extract_artist_title_from_filename(filename: str):
     if not filename:
         return {
@@ -117,6 +161,14 @@ def extract_artist_title_from_filename(filename: str):
             "title": None,
             "confidence": 0.0,
         }
+        
+    
+    reversed_result = extract_reversed_lyric_filename(name)
+
+    if reversed_result:
+        return reversed_result
+
+
 
     match = re.match(
         r"^(.+?)\s*[-–—_]\s*(.+)$",
