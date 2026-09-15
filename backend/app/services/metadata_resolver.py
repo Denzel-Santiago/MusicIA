@@ -3,10 +3,15 @@ from __future__ import annotations
 from app.services.filename_parser import (
     extract_artist_title_from_filename,
 )
+
 from app.services.metadata_quality import (
     evaluate_metadata_quality,
 )
 
+
+# ============================================================
+# FUNCIONES AUXILIARES
+# ============================================================
 
 def _clean_filename_title_with_artist(
     original_title: str | None,
@@ -14,92 +19,232 @@ def _clean_filename_title_with_artist(
     filename_title: str | None,
 ) -> str | None:
     """
-    Evita conservar un prefijo redundante del artista
-    cuando el título proviene del fallback del filename.
+    Limpia un título proveniente de filename cuando el título
+    original contiene también el nombre del artista.
 
     Ejemplo:
 
-        original:
-            "Avicii - The Nights"
+        original_title:
+            Avicii - Waiting For Love
 
         filename:
-            artist = "Avicii"
-            title = "The Nights"
+            Avicii - Waiting For Love
 
         resultado:
-            "The Nights"
+            Waiting For Love
     """
 
     if not original_title:
-        return None
+        return filename_title
 
     if not filename_artist or not filename_title:
         return original_title
 
-    original_clean = original_title.strip()
-    artist_clean = filename_artist.strip()
-    title_clean = filename_title.strip()
+    original_title_normalized = (
+        str(original_title).strip()
+    )
 
-    prefix = f"{artist_clean} - "
+    filename_artist_normalized = (
+        str(filename_artist).strip()
+    )
 
-    if original_clean.casefold().startswith(
-        prefix.casefold()
+    # --------------------------------------------------------
+    # Si el título comienza con "Artista - "
+    # eliminamos esa parte.
+    # --------------------------------------------------------
+
+    prefixes = (
+        f"{filename_artist_normalized} - ",
+        f"{filename_artist_normalized} – ",
+        f"{filename_artist_normalized} — ",
+        f"{filename_artist_normalized}_",
+    )
+
+    for prefix in prefixes:
+        if original_title_normalized.lower().startswith(
+            prefix.lower()
+        ):
+            cleaned = (
+                original_title_normalized[
+                    len(prefix):
+                ].strip()
+            )
+
+            if cleaned:
+                return cleaned
+
+    # --------------------------------------------------------
+    # Si coincide exactamente con el filename_title,
+    # usamos el título extraído.
+    # --------------------------------------------------------
+
+    if (
+        original_title_normalized.lower()
+        == filename_title.lower()
     ):
-        remaining_title = original_clean[
-            len(prefix):
-        ].strip()
-
-        if remaining_title.casefold() == title_clean.casefold():
-            return title_clean
+        return filename_title
 
     return original_title
 
 
+# ============================================================
+# NUEVA FUNCIÓN AUXILIAR
+# ============================================================
+
+def _metadata_title_is_filename_contaminated(
+    original_title: str | None,
+    original_artist: str | None,
+    filename_artist: str | None,
+    filename_title: str | None,
+    filename_confidence: float,
+) -> bool:
+    """
+    Determina si el título de metadata parece ser realmente
+    una combinación de:
+
+        Artista - Título
+
+    que el filename ya logró separar correctamente.
+
+    Ejemplo:
+
+        original_title:
+            Avicii - The Nights
+
+        original_artist:
+            None
+
+        filename:
+            Avicii - The Nights
+
+        filename_artist:
+            Avicii
+
+        filename_title:
+            The Nights
+
+    En este caso la metadata del título se considera
+    contaminada/incompleta y se prefiere la información
+    estructurada del filename.
+    """
+
+    if not original_title:
+        return False
+
+    if original_artist:
+        return False
+
+    if not filename_artist or not filename_title:
+        return False
+
+    if filename_confidence < 0.8:
+        return False
+
+    original_normalized = (
+        str(original_title).strip().lower()
+    )
+
+    filename_artist_normalized = (
+        str(filename_artist).strip().lower()
+    )
+
+    filename_title_normalized = (
+        str(filename_title).strip().lower()
+    )
+
+    # --------------------------------------------------------
+    # Caso esperado:
+    #
+    # "Avicii - The Nights"
+    #
+    # debe corresponder a:
+    #
+    # artist = "Avicii"
+    # title  = "The Nights"
+    # --------------------------------------------------------
+
+    expected_titles = (
+        f"{filename_artist_normalized} - "
+        f"{filename_title_normalized}",
+
+        f"{filename_artist_normalized} – "
+        f"{filename_title_normalized}",
+
+        f"{filename_artist_normalized} — "
+        f"{filename_title_normalized}",
+
+        f"{filename_artist_normalized}_"
+        f"{filename_title_normalized}",
+    )
+
+    return original_normalized in expected_titles
+
+
+# ============================================================
+# RESOLVER PRINCIPAL
+# ============================================================
+
 def resolve_metadata(
     metadata: dict,
     filename: str,
-):
+) -> dict:
     """
-    Resuelve metadata local utilizando:
+    Resuelve la identidad local de una canción.
 
-        1. Metadata original
-        2. Nombre del archivo
-        3. Evaluación de calidad
+    Prioridad general:
 
-    IMPORTANTE:
+    1. Metadata confiable.
+    2. Filename cuando la metadata está incompleta.
+    3. Filename cuando la metadata es sospechosa.
+    4. Filename cuando el título de metadata está contaminado
+       con el patrón "Artista - Título".
+    5. Conservación de metadata cuando no existe evidencia
+       suficiente para reemplazarla.
 
-    - NO modifica la metadata original.
-    - NO modifica la base de datos.
-    - NO consulta servicios externos.
-    - La capa de calidad solamente aporta contexto.
+    Este resolver NO modifica la base de datos.
     """
 
-    # =========================================================
-    # 1. Evaluar calidad de la metadata original
-    # =========================================================
+    metadata = metadata or {}
+
+    # ========================================================
+    # 1. Evaluar calidad de metadata
+    # ========================================================
 
     quality = evaluate_metadata_quality(
         metadata,
         filename,
     )
 
-    # =========================================================
-    # 2. Obtener metadata original
-    # =========================================================
+    quality_status = quality.get(
+        "status",
+        "unknown",
+    )
 
-    original_artist = metadata.get("artist")
-    original_title = metadata.get("title")
+    # ========================================================
+    # 2. Obtener metadata original
+    # ========================================================
+
+    original_artist = metadata.get(
+        "artist"
+    )
+
+    original_title = metadata.get(
+        "title"
+    )
+
     title_source = metadata.get(
         "title_source",
         "metadata",
     )
 
-    # =========================================================
+    # ========================================================
     # 3. Analizar filename
-    # =========================================================
+    # ========================================================
 
-    filename_result = extract_artist_title_from_filename(
-        filename
+    filename_result = (
+        extract_artist_title_from_filename(
+            filename
+        )
     )
 
     filename_artist = filename_result.get(
@@ -115,11 +260,56 @@ def resolve_metadata(
         0.0,
     )
 
-    # =========================================================
-    # 4. Resolver artista
-    # =========================================================
+    # ========================================================
+    # 4. Detectar metadata de título contaminada
+    # ========================================================
 
-    if original_artist:
+    contaminated_title = (
+        _metadata_title_is_filename_contaminated(
+            original_title=original_title,
+            original_artist=original_artist,
+            filename_artist=filename_artist,
+            filename_title=filename_title,
+            filename_confidence=filename_confidence,
+        )
+    )
+
+    # ========================================================
+    # 5. Determinar si debemos preferir filename
+    # ========================================================
+
+    prefer_filename = (
+        (
+            quality_status == "suspicious"
+            and filename_confidence >= 0.8
+            and filename_artist
+            and filename_title
+        )
+        or contaminated_title
+        or (
+            not original_artist
+            and filename_confidence >= 0.8
+            and filename_artist
+            and filename_title
+        )
+    )
+
+    # ========================================================
+    # 6. Resolver artista
+    # ========================================================
+
+    if prefer_filename:
+
+        normalized_artist = filename_artist
+
+        artist_source = "filename"
+
+        artist_confidence = (
+            filename_confidence
+        )
+
+    elif original_artist:
+
         normalized_artist = original_artist
 
         artist_source = "metadata"
@@ -130,27 +320,42 @@ def resolve_metadata(
         filename_artist
         and filename_confidence >= 0.8
     ):
+
         normalized_artist = filename_artist
 
         artist_source = "filename"
 
-        artist_confidence = filename_confidence
+        artist_confidence = (
+            filename_confidence
+        )
 
     else:
+
         normalized_artist = None
 
         artist_source = None
 
         artist_confidence = 0.0
 
-    # =========================================================
-    # 5. Resolver título
-    # =========================================================
+    # ========================================================
+    # 7. Resolver título
+    # ========================================================
 
-    if (
+    if prefer_filename:
+
+        normalized_title = filename_title
+
+        title_source_result = "filename"
+
+        title_confidence = (
+            filename_confidence
+        )
+
+    elif (
         original_title
         and title_source == "metadata"
     ):
+
         normalized_title = original_title
 
         title_source_result = "metadata"
@@ -164,6 +369,7 @@ def resolve_metadata(
         and filename_title
         and filename_confidence >= 0.8
     ):
+
         normalized_title = (
             _clean_filename_title_with_artist(
                 original_title,
@@ -174,35 +380,42 @@ def resolve_metadata(
 
         title_source_result = "filename"
 
-        title_confidence = filename_confidence
+        title_confidence = (
+            filename_confidence
+        )
 
     elif (
         filename_title
         and filename_confidence >= 0.8
     ):
+
         normalized_title = filename_title
 
         title_source_result = "filename"
 
-        title_confidence = filename_confidence
+        title_confidence = (
+            filename_confidence
+        )
 
     elif original_title:
+
         normalized_title = original_title
 
-        title_source_result = "filename"
+        title_source_result = "metadata"
 
         title_confidence = 0.4
 
     else:
+
         normalized_title = None
 
         title_source_result = None
 
         title_confidence = 0.0
 
-    # =========================================================
-    # 6. Determinar fuente combinada
-    # =========================================================
+    # ========================================================
+    # 8. Determinar fuente combinada
+    # ========================================================
 
     sources = {
         artist_source,
@@ -212,37 +425,39 @@ def resolve_metadata(
     sources.discard(None)
 
     if sources == {"metadata"}:
+
         metadata_source = "metadata"
 
     elif sources == {"filename"}:
+
         metadata_source = "filename"
 
     elif len(sources) > 1:
+
         metadata_source = "mixed"
 
     elif sources == {"filename_fallback"}:
+
         metadata_source = "filename"
 
     elif sources:
+
         metadata_source = next(
             iter(sources)
         )
 
     else:
+
         metadata_source = None
 
-     # =========================================================
-    # 7. Calcular confianza de resolución local
-    # =========================================================
+    # ========================================================
+    # 9. Calcular confianza de resolución
+    # ========================================================
 
     if (
         normalized_title
         and normalized_artist
     ):
-        # Tenemos título + artista.
-        #
-        # La confianza representa la calidad de las fuentes
-        # utilizadas para obtener ambos campos.
 
         metadata_confidence = min(
             artist_confidence,
@@ -250,11 +465,6 @@ def resolve_metadata(
         )
 
     elif normalized_title:
-        # Solo tenemos título.
-        #
-        # Aunque el título provenga directamente de metadata,
-        # la identificación todavía está incompleta porque
-        # falta el artista.
 
         metadata_confidence = min(
             title_confidence,
@@ -262,9 +472,6 @@ def resolve_metadata(
         )
 
     elif normalized_artist:
-        # Solo tenemos artista.
-        #
-        # También es una identificación incompleta.
 
         metadata_confidence = min(
             artist_confidence,
@@ -272,35 +479,40 @@ def resolve_metadata(
         )
 
     else:
+
         metadata_confidence = 0.0
 
-    # =========================================================
-    # 8. Estado de resolución local
-    # =========================================================
+    # ========================================================
+    # 10. Estado de resolución
+    # ========================================================
 
     if (
         normalized_title
         and normalized_artist
     ):
+
         resolution_status = "resolved"
 
     elif (
         normalized_title
         or normalized_artist
     ):
+
         resolution_status = "partial"
 
     else:
+
         resolution_status = "unresolved"
 
-    # =========================================================
-    # 9. Resultado final
-    # =========================================================
+    # ========================================================
+    # 11. Resultado final
+    # ========================================================
 
     return {
-        # -----------------------------------------------
+
+        # ----------------------------------------------------
         # Metadata resuelta
-        # -----------------------------------------------
+        # ----------------------------------------------------
 
         "title": normalized_title,
 
@@ -308,141 +520,48 @@ def resolve_metadata(
 
         "metadata_source": metadata_source,
 
-        "metadata_confidence": metadata_confidence,
+        "metadata_confidence": (
+            metadata_confidence
+        ),
 
-        # -----------------------------------------------
-        # Estado de resolución
-        # -----------------------------------------------
+        # ----------------------------------------------------
+        # Estado
+        # ----------------------------------------------------
 
-        "resolution_status": resolution_status,
+        "resolution_status": (
+            resolution_status
+        ),
 
-        # -----------------------------------------------
-        # Calidad de metadata
-        # -----------------------------------------------
+        # ----------------------------------------------------
+        # Calidad
+        # ----------------------------------------------------
 
         "quality": quality,
 
-        # -----------------------------------------------
+        # ----------------------------------------------------
         # Información del filename
-        # -----------------------------------------------
+        # ----------------------------------------------------
 
         "filename": {
+
             "artist": filename_artist,
+
             "title": filename_title,
+
             "confidence": filename_confidence,
+
         },
 
-        # -----------------------------------------------
+        # ----------------------------------------------------
         # Metadata original
-        # -----------------------------------------------
+        # ----------------------------------------------------
 
         "original": {
+
             "title": original_title,
+
             "artist": original_artist,
+
         },
+
     }
-
-
-# =============================================================
-# Pruebas manuales
-# =============================================================
-
-if __name__ == "__main__":
-
-    tests = [
-        {
-            "filename": "Avicii - The Nights.mp3",
-            "metadata": {
-                "title": "The Nights",
-                "artist": "Avicii",
-                "title_source": "metadata",
-            },
-        },
-        {
-            "filename": "Avicii - Waiting For Love.mp3",
-            "metadata": {
-                "title": "Waiting For Love",
-                "artist": None,
-                "title_source": "filename_fallback",
-            },
-        },
-        {
-            "filename": "Broken Arrows.mp3",
-            "metadata": {
-                "title": "Broken Arrows",
-                "artist": None,
-                "title_source": "metadata",
-            },
-        },
-        {
-            "filename": (
-                "(Letra) Hablame De Ti - "
-                "Banda MS (Completa).mp3"
-            ),
-            "metadata": {
-                "title": "Banda MS (Completa)",
-                "artist": "(Letra) Hablame De Ti",
-                "title_source": "metadata",
-            },
-        },
-    ]
-
-    for test in tests:
-
-        result = resolve_metadata(
-            test["metadata"],
-            test["filename"],
-        )
-
-        print("\n=============================")
-
-        print(
-            f"Archivo: {test['filename']}"
-        )
-
-        print(
-            f"Título resuelto: "
-            f"{result['title']}"
-        )
-
-        print(
-            f"Artista resuelto: "
-            f"{result['artist']}"
-        )
-
-        print(
-            f"Fuente: "
-            f"{result['metadata_source']}"
-        )
-
-        print(
-            f"Confianza: "
-            f"{result['metadata_confidence']}"
-        )
-
-        print(
-            f"Estado resolución: "
-            f"{result['resolution_status']}"
-        )
-
-        quality = result["quality"]
-
-        print(
-            f"Calidad: "
-            f"{quality['status']}"
-        )
-
-        print(
-            f"Confianza calidad: "
-            f"{quality['confidence']}"
-        )
-
-        print(
-            f"Ruido contenido: "
-            f"{quality['content_noise']}"
-        )
-
-        print("Razones:")
-
-        for reason in quality["reasons"]:
-            print(f"  - {reason}")

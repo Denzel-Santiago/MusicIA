@@ -6,7 +6,6 @@ from typing import Any
 from app.services.metadata_matcher import (
     calculate_text_similarity,
     normalize_artist_for_comparison,
-    normalize_for_comparison,
 )
 
 
@@ -66,14 +65,135 @@ def _artist_credit_tokens(value: str | None) -> set[str]:
     return set(parts)
 
 
+def _artist_name_similarity(
+    local_artist: str,
+    acoustic_artist: str,
+) -> float:
+    """
+    Compara dos nombres individuales de artista.
+
+    Reconoce:
+
+        "Banda MS"
+        "Banda MS de Sergio Lizárraga"
+
+    como la misma identidad.
+
+    También evita considerar como coincidencia una sola palabra
+    genérica compartida:
+
+        "Banda MS"
+        "Banda El Recodo"
+
+    """
+
+    local_normalized = local_artist.strip()
+    acoustic_normalized = acoustic_artist.strip()
+
+    if not local_normalized or not acoustic_normalized:
+        return 0.0
+
+    # Coincidencia exacta.
+    if local_normalized == acoustic_normalized:
+        return 1.0
+
+    local_words = local_normalized.split()
+    acoustic_words = acoustic_normalized.split()
+
+    if not local_words or not acoustic_words:
+        return 0.0
+
+    # ---------------------------------------------------------
+    # Coincidencia por prefijo.
+    #
+    # "banda ms"
+    # "banda ms de sergio lizarraga"
+    #
+    # El nombre corto coincide completamente con el comienzo
+    # del nombre largo.
+    # ---------------------------------------------------------
+
+    if len(local_words) >= 2 and len(local_words) < len(acoustic_words):
+        if acoustic_words[:len(local_words)] == local_words:
+            return 1.0
+
+    if len(acoustic_words) >= 2 and len(acoustic_words) < len(local_words):
+        if local_words[:len(acoustic_words)] == acoustic_words:
+            return 1.0
+
+    # ---------------------------------------------------------
+    # Coincidencia exacta por conjunto de palabras.
+    #
+    # Solo permitimos esto cuando ambos nombres tienen al
+    # menos dos palabras.
+    #
+    # Así evitamos:
+    #
+    # "Banda"
+    # "Banda MS"
+    #
+    # como coincidencia válida.
+    # ---------------------------------------------------------
+
+    if len(local_words) >= 2 and len(acoustic_words) >= 2:
+        local_word_set = set(local_words)
+        acoustic_word_set = set(acoustic_words)
+
+        if (
+            local_word_set.issubset(acoustic_word_set)
+            or acoustic_word_set.issubset(local_word_set)
+        ):
+            return 1.0
+
+    # ---------------------------------------------------------
+    # Si solamente hay una palabra en alguno de los nombres,
+    # NO hacemos similitud textual parcial.
+    #
+    # Esto evita falsos positivos con palabras genéricas como:
+    #
+    # "Banda"
+    # "Banda MS"
+    # ---------------------------------------------------------
+
+    if len(local_words) < 2 or len(acoustic_words) < 2:
+        return 0.0
+
+    # ---------------------------------------------------------
+    # Último recurso: similitud textual.
+    #
+    # Aquí ya sabemos que ambos nombres contienen al menos
+    # dos palabras.
+    # ---------------------------------------------------------
+
+    textual_similarity = calculate_text_similarity(
+        local_normalized,
+        acoustic_normalized,
+    )
+
+    # Una similitud textual baja no es suficiente para considerar
+    # que dos artistas son compatibles.
+    #
+    # Esto evita falsos positivos como:
+    #
+    #   "Banda MS"
+    #   "Banda El Recodo"
+    #
+    # donde únicamente coincide una palabra genérica.
+    if textual_similarity >= 0.80:
+        return textual_similarity
+
+    return 0.0
+
+
 def _artist_credit_similarity(
     local_artist: str | None,
     acoustic_artist: str | None,
 ) -> float:
     """
-    Compara artistas teniendo en cuenta créditos múltiples.
+    Compara artistas teniendo en cuenta créditos múltiples y
+    diferentes formas de acreditar al mismo artista.
 
-    La comparación permite reconocer casos como:
+    Casos soportados:
 
         Avicii
         Avicii, Billy Raffoul
@@ -82,6 +202,11 @@ def _artist_credit_similarity(
 
         Avicii Feat. Sandro Cavazza
         Avicii, Sandro Cavazza
+
+    También reconoce formas abreviadas:
+
+        Banda MS
+        Banda MS de Sergio Lizárraga
     """
 
     local_tokens = _artist_credit_tokens(local_artist)
@@ -90,42 +215,102 @@ def _artist_credit_similarity(
     if not local_tokens or not acoustic_tokens:
         return 0.0
 
+    # Coincidencia exacta de todos los créditos.
     if local_tokens == acoustic_tokens:
         return 1.0
 
-    local_in_acoustic = local_tokens.issubset(
-        acoustic_tokens
-    )
+    # ---------------------------------------------------------
+    # CASO IMPORTANTE:
+    #
+    # Si todos los artistas locales aparecen correctamente
+    # dentro de los artistas acústicos, consideramos que la
+    # identidad local es compatible.
+    #
+    # Ejemplo:
+    #
+    # local:
+    #   {"avicii"}
+    #
+    # acústico:
+    #   {"avicii", "billy raffoul"}
+    #
+    # Esto debe ser 1.0.
+    # ---------------------------------------------------------
 
-    acoustic_in_local = acoustic_tokens.issubset(
-        local_tokens
-    )
-
-    if local_in_acoustic or acoustic_in_local:
-        return 1.0
-
-    best_matches = []
+    local_matches = []
 
     for local_token in local_tokens:
-        token_best = 0.0
+        best_match = 0.0
 
         for acoustic_token in acoustic_tokens:
-            similarity = calculate_text_similarity(
+            similarity = _artist_name_similarity(
                 local_token,
                 acoustic_token,
             )
 
-            token_best = max(
-                token_best,
+            best_match = max(
+                best_match,
                 similarity,
             )
 
-        best_matches.append(token_best)
+        local_matches.append(best_match)
 
-    if not best_matches:
+    if local_matches and min(local_matches) >= 1.0:
+        return 1.0
+
+    # ---------------------------------------------------------
+    # CASO INVERSO:
+    #
+    # Si todos los artistas acústicos aparecen dentro de los
+    # artistas locales, también son compatibles.
+    #
+    # Ejemplo:
+    #
+    # local:
+    #   Avicii Feat. Sandro Cavazza
+    #
+    # acústico:
+    #   Avicii, Sandro Cavazza
+    #
+    # ---------------------------------------------------------
+
+    acoustic_matches = []
+
+    for acoustic_token in acoustic_tokens:
+        best_match = 0.0
+
+        for local_token in local_tokens:
+            similarity = _artist_name_similarity(
+                local_token,
+                acoustic_token,
+            )
+
+            best_match = max(
+                best_match,
+                similarity,
+            )
+
+        acoustic_matches.append(best_match)
+
+    if acoustic_matches and min(acoustic_matches) >= 1.0:
+        return 1.0
+
+    # ---------------------------------------------------------
+    # Si no existe una coincidencia completa, calculamos una
+    # similitud parcial.
+    #
+    # Importante:
+    # no dejamos que una sola palabra genérica produzca una
+    # coincidencia significativa.
+    # ---------------------------------------------------------
+
+    if not local_matches:
         return 0.0
 
-    return sum(best_matches) / len(best_matches)
+    return round(
+        sum(local_matches) / len(local_matches),
+        4,
+    )
 
 
 def _title_similarity(
