@@ -27,7 +27,7 @@ from app.services.metadata_resolver import (
 from app.services.metadata_cleaner import clean_title
 
 
-BASE_DIR = Path(__file__).resolve().parents[3]
+BASE_DIR = Path(__file__).resolve().parents[4]
 
 load_dotenv(BASE_DIR / ".env")
 

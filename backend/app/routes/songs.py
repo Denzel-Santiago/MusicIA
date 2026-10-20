@@ -1,298 +1,67 @@
-from fastapi import APIRouter, HTTPException, Depends
-from sqlalchemy.orm import Session
+from fastapi import APIRouter, Depends, HTTPException
 
-from app.database.connection import get_db
-from app.models.song import Song
-from app.services.scanner import find_duplicates, scan_music_folder
-from app.services.library import save_song
-from app.services.metadata_normalizer import normalize_metadata
-from pathlib import Path
-from app.services.scanner import read_metadata
-from app.services.metadata_resolver import resolve_metadata
-from app.services.metadata_cleaner import clean_resolved_metadata
+from app.application.use_cases.library import ListSongs, ScanLibrary
+from app.application.use_cases.metadata import (
+    ApplyCleanMetadata,
+    NormalizeLibraryMetadata,
+    PreviewCleanMetadata,
+    ResolveLibraryMetadata,
+)
+from app.bootstrap.dependencies import (
+    get_apply_clean_metadata_use_case,
+    get_list_songs_use_case,
+    get_normalize_library_metadata_use_case,
+    get_preview_clean_metadata_use_case,
+    get_resolve_library_metadata_use_case,
+    get_scan_library_use_case,
+)
 
 router = APIRouter(prefix="/songs", tags=["Songs"])
-
-PROTECTED_CLEANING_FIELDS = (
-    "id",
-    "title",
-    "artist",
-    "album",
-    "genre",
-    "year",
-    "duration",
-    "normalized_artist",
-    "metadata_source",
-    "metadata_confidence",
-    "file_path",
-    "file_hash",
-    "is_available",
-)
 
 
 @router.post("/scan")
 def scan_folder(
     folder_path: str,
-    db: Session = Depends(get_db),
+    use_case: ScanLibrary = Depends(get_scan_library_use_case),
 ):
     try:
-        files = scan_music_folder(folder_path)
-
-        unique_files, duplicates = find_duplicates(files)
-
-        new_songs = 0
-        unchanged_songs = 0
-        updated_songs = 0
-
-        scanned_hashes = set()
-
-        for file_path in unique_files:
-            result = save_song(db, file_path)
-
-            song = result["song"]
-            scanned_hashes.add(song.file_hash)
-
-            if result["status"] == "new":
-                new_songs += 1
-
-            elif result["status"] == "unchanged":
-                unchanged_songs += 1
-
-            elif result["status"] == "updated":
-                updated_songs += 1
-
-        missing_songs = 0
-
-        songs = db.query(Song).all()
-
-        for song in songs:
-            if song.file_hash not in scanned_hashes:
-                if song.is_available:
-                    song.is_available = False
-                    missing_songs += 1
-
-        db.commit()
-
-        return {
-            "folder": folder_path,
-            "total_files": len(files),
-            "unique_files": len(unique_files),
-            "duplicates": len(duplicates),
-            "new_songs": new_songs,
-            "unchanged_songs": unchanged_songs,
-            "updated_songs": updated_songs,
-            "missing_songs": missing_songs,
-            "duplicate_files": [
-                {
-                    "file": str(item["file"]),
-                    "duplicate_of": str(item["duplicate_of"]),
-                }
-                for item in duplicates
-            ],
-        }
-
+        return use_case.execute(folder_path)
     except FileNotFoundError as error:
-        raise HTTPException(
-            status_code=404,
-            detail=str(error),
-        )
-
+        raise HTTPException(status_code=404, detail=str(error)) from error
     except NotADirectoryError as error:
-        raise HTTPException(
-            status_code=400,
-            detail=str(error),
-        )
+        raise HTTPException(status_code=400, detail=str(error)) from error
 
 
 @router.get("")
-def get_songs(db: Session = Depends(get_db)):
-    songs = db.query(Song).all()
+def get_songs(
+    use_case: ListSongs = Depends(get_list_songs_use_case),
+):
+    return use_case.execute()
 
-    return songs
 
 @router.post("/normalize")
-def normalize_library(db: Session = Depends(get_db)):
-    songs = db.query(Song).all()
+def normalize_library(
+    use_case: NormalizeLibraryMetadata = Depends(get_normalize_library_metadata_use_case),
+):
+    return use_case.execute()
 
-    updated_songs = 0
 
-    for song in songs:
-
-        original_data = {
-            "title": song.title,
-            "artist": song.artist,
-            "album": song.album,
-            "genre": song.genre,
-            "year": song.year,
-            "duration": song.duration,
-        }
-
-        normalized_data = normalize_metadata(original_data)
-
-        changed = False
-
-        if song.title != normalized_data["title"]:
-            song.title = normalized_data["title"]
-            changed = True
-
-        if song.artist != normalized_data["artist"]:
-            song.artist = normalized_data["artist"]
-            changed = True
-
-        if song.album != normalized_data["album"]:
-            song.album = normalized_data["album"]
-            changed = True
-
-        if song.genre != normalized_data["genre"]:
-            song.genre = normalized_data["genre"]
-            changed = True
-
-        if changed:
-            updated_songs += 1
-
-    db.commit()
-
-    return {
-        "total_songs": len(songs),
-        "updated_songs": updated_songs,
-    }
-    
 @router.post("/resolve-metadata")
-def resolve_library_metadata(db: Session = Depends(get_db)):
-    songs = db.query(Song).all()
-
-    processed_songs = 0
-    skipped_songs = 0
-    updated_songs = 0
-
-    changes = []
-
-    for song in songs:
-
-        file_path = Path(song.file_path)
-
-        if not file_path.exists():
-            skipped_songs += 1
-            continue
-
-        metadata = read_metadata(file_path)
-        metadata = normalize_metadata(metadata)
-
-        resolved_metadata = resolve_metadata(
-            metadata,
-            file_path.name
-        )
-
-        old_values = {
-            "normalized_title": song.normalized_title,
-            "normalized_artist": song.normalized_artist,
-            "metadata_source": song.metadata_source,
-            "metadata_confidence": song.metadata_confidence,
-        }
-
-        song.normalized_title = resolved_metadata.get("title")
-        song.normalized_artist = resolved_metadata.get("artist")
-        song.metadata_source = resolved_metadata.get("metadata_source")
-        song.metadata_confidence = resolved_metadata.get("metadata_confidence")
-
-        new_values = {
-            "normalized_title": song.normalized_title,
-            "normalized_artist": song.normalized_artist,
-            "metadata_source": song.metadata_source,
-            "metadata_confidence": song.metadata_confidence,
-        }
-
-        if old_values != new_values:
-            updated_songs += 1
-
-            changes.append({
-                "file": file_path.name,
-                "old": old_values,
-                "new": new_values,
-            })
-
-        processed_songs += 1
-
-    db.commit()
-
-    return {
-        "total_songs": len(songs),
-        "processed_songs": processed_songs,
-        "skipped_songs": skipped_songs,
-        "updated_songs": updated_songs,
-        "changes": changes,
-    }
+def resolve_library_metadata(
+    use_case: ResolveLibraryMetadata = Depends(get_resolve_library_metadata_use_case),
+):
+    return use_case.execute()
 
 
 @router.post("/clean-metadata")
-def preview_clean_metadata(db: Session = Depends(get_db)):
-    """Preview normalized title cleanup without changing persisted songs."""
-    songs = db.query(Song).all()
-    changes = []
-
-    for song in songs:
-        before = song.normalized_title
-        cleaned_metadata = clean_resolved_metadata({"title": before})
-        after = cleaned_metadata["title"]
-
-        if before != after:
-            changes.append({
-                "file": Path(song.file_path).name,
-                "before": before,
-                "after": after,
-            })
-
-    return {
-        "total_songs": len(songs),
-        "songs_with_changes": len(changes),
-        "songs_without_changes": len(songs) - len(changes),
-        "changes": changes,
-    }
+def preview_clean_metadata(
+    use_case: PreviewCleanMetadata = Depends(get_preview_clean_metadata_use_case),
+):
+    return use_case.execute()
 
 
 @router.post("/clean-metadata/apply")
-def apply_clean_metadata(db: Session = Depends(get_db)):
-    """Persist only normalized title cleanup after protecting all other fields."""
-    songs = db.query(Song).all()
-    changes = []
-
-    for song in songs:
-        before = song.normalized_title
-        cleaned_metadata = clean_resolved_metadata({"title": before})
-        after = cleaned_metadata["title"]
-
-        if before == after:
-            continue
-
-        protected_values = {
-            field: getattr(song, field)
-            for field in PROTECTED_CLEANING_FIELDS
-        }
-
-        # This is the only model attribute the APPLY endpoint may assign.
-        song.normalized_title = after
-
-        if any(
-            getattr(song, field) != value
-            for field, value in protected_values.items()
-        ):
-            db.rollback()
-            raise HTTPException(
-                status_code=500,
-                detail="Protected song metadata changed during cleanup.",
-            )
-
-        changes.append({
-            "file": Path(song.file_path).name,
-            "before": before,
-            "after": after,
-        })
-
-    db.commit()
-
-    return {
-        "total_songs": len(songs),
-        "updated_songs": len(changes),
-        "unchanged_songs": len(songs) - len(changes),
-        "changes": changes,
-    }
+def apply_clean_metadata(
+    use_case: ApplyCleanMetadata = Depends(get_apply_clean_metadata_use_case),
+):
+    return use_case.execute()

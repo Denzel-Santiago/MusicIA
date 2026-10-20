@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 
-from app.database.connection import Base, engine
-from app.models.song import Song
+from app.adapters.persistence.sqlalchemy.database import Base, engine
+from app.adapters.persistence.sqlalchemy.song import Song
 from app.routes.songs import router as songs_router
 
 

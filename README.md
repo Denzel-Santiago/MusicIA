@@ -53,39 +53,24 @@ MusicAI deberá:
 
 ```text
 MusicAI/
-
 ├── backend/
 │   ├── app/
-│   │   ├── database/connection.py
-│   │   ├── models/song.py
-│   │   └── services/
-│   │       ├── scanner.py
-│   │       ├── library.py
-│   │       ├── metadata_normalizer.py
-│   │       ├── filename_parser.py
-│   │       ├── metadata_resolver.py
-│   │       ├── metadata_cleaner.py
-│   │       ├── metadata_identifier.py
-│   │       ├── musicbrainz_client.py
-│   │       ├── metadata_matcher.py
-│   │       ├── metadata_quality.py
-│   │       ├── acoustic_fingerprint.py
-│   │       ├── acoustic_fingerprint_store.py
-│   │       ├── acoustic_library.py
-│   │       ├── acoustic_identifier.py
-│   │       ├── acoustid_client.py
-│   │       ├── acoustic_metadata_resolver.py
-│   │       ├── acoustic_identity_comparator.py
-│   │       └── archivos de prueba
-│   └── .venv/
-│
+│   │   ├── domain/          # reglas puras de metadata, identidad y música
+│   │   ├── application/     # casos de uso y puertos
+│   │   ├── adapters/        # filesystem, SQLAlchemy, HTTP y audio
+│   │   ├── bootstrap/       # composición de dependencias
+│   │   ├── routes/          # API FastAPI
+│   │   └── services/        # fachadas compatibles y analyzer en diseño
+│   ├── tests/               # pruebas unitarias y de arquitectura
+│   └── app/services/test/   # diagnósticos y pruebas heredadas
 ├── frontend/
 ├── data/music.db
 ├── music/
 ├── .env
-├── .gitignore
 └── README.md
 ```
+
+La dirección de dependencias y el estado detallado de la migración están en [backend/ARCHITECTURE.md](backend/ARCHITECTURE.md).
 
 ### Stack actual
 
@@ -630,7 +615,7 @@ La prueba extendida obtuvo:
 La prueba principal:
 
 ```powershell
-python -m app.services.test_acoustic_integration
+python -m app.services.test.test_acoustic_integration
 ```
 
 valida el flujo completo:
@@ -814,13 +799,13 @@ Por lo tanto, el sistema todavía **no sobrescribe automáticamente la metadata 
 ### Filename parser
 
 ```powershell
-python -m app.services.test_filename_parser_problematic
+python -m app.services.test.test_filename_parser_problematic
 ```
 
 ### Metadata resolver
 
 ```powershell
-python -m app.services.test_metadata_resolver_problematic
+python -m app.services.test.test_metadata_resolver_problematic
 ```
 
 Esta prueba cubre metadata correcta, sospechosa, incompleta, filenames ambiguos, fallback y formatos invertidos.
@@ -830,7 +815,7 @@ No modifica SQLite.
 ### Ranking acústico
 
 ```powershell
-python -m app.services.test_acoustic_candidate_ranking
+python -m app.services.test.test_acoustic_candidate_ranking
 ```
 
 Comprueba fingerprint, AcoustID, múltiples candidatos, MusicBrainz y ranking.
@@ -838,7 +823,7 @@ Comprueba fingerprint, AcoustID, múltiples candidatos, MusicBrainz y ranking.
 ### Comparador de artistas
 
 ```powershell
-python -m app.services.test_artist_credit_similarity
+python -m app.services.test.test_artist_credit_similarity
 ```
 
 Comprueba créditos equivalentes y colaboraciones.
@@ -846,7 +831,7 @@ Comprueba créditos equivalentes y colaboraciones.
 ### Política del comparador
 
 ```powershell
-python -m app.services.test_acoustic_identity_policy_extended
+python -m app.services.test.test_acoustic_identity_policy_extended
 ```
 
 Comprueba coincidencias, conflictos, versiones, colaboraciones y ausencia de resultados.
@@ -854,7 +839,7 @@ Comprueba coincidencias, conflictos, versiones, colaboraciones y ausencia de res
 ### Comparador multi-canción
 
 ```powershell
-python -m app.services.test_acoustic_identity_comparator_multi
+python -m app.services.test.test_acoustic_identity_comparator_multi
 ```
 
 Prueba cinco canciones y compara identidad local contra identidad acústica.
@@ -862,7 +847,7 @@ Prueba cinco canciones y compara identidad local contra identidad acústica.
 ### Integración acústica completa
 
 ```powershell
-python -m app.services.test_acoustic_integration
+python -m app.services.test.test_acoustic_integration
 ```
 
 Prueba el pipeline completo de cinco canciones.

@@ -3,7 +3,7 @@ MusicAI - Fase 3.1: prueba aislada del diseño del Audio Analyzer.
 
 Ejecutar desde MusicAI/backend:
 
-    python -m app.services.test_audio_analyzer_design
+    python -m app.services.test.test_audio_analyzer_design
 
 - Genera audio sintético en una carpeta temporal (no usa music/).
 - NO modifica SQLite.
@@ -30,7 +30,7 @@ from app.services.audio_analyzer import (
 from app.services.scanner import SUPPORTED_EXTENSIONS
 
 
-BASE_DIR = Path(__file__).resolve().parents[3]
+BASE_DIR = Path(__file__).resolve().parents[4]
 MUSIC_DIR = BASE_DIR / "music"
 
 results: list[tuple[str, bool, str]] = []

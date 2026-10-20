@@ -6,7 +6,7 @@ from app.services.acoustic_fingerprint import (
 )
 
 
-BASE_DIR = Path(__file__).resolve().parents[3]
+BASE_DIR = Path(__file__).resolve().parents[4]
 
 SONG_PATH = (
     BASE_DIR

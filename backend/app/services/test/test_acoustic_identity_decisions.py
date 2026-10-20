@@ -121,8 +121,10 @@ TEST_CASES = [
             "artist": "Avicii",
             "acoustid_score": 0.70,
         },
-        "expected_classification": "review",
-        "expected_decision": "review_recommended",
+        # The title similarity is 0.3333, below the comparator's
+        # conflict threshold. Keep this aligned with the extended policy test.
+        "expected_classification": "conflict",
+        "expected_decision": "review_required",
     },
     {
         "name": "Sin identidad acústica",
